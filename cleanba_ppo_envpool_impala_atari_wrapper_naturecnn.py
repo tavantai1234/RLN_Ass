@@ -233,18 +233,7 @@ def prepare_data(
     logprobs = jnp.asarray(logprobs) # (T+1, B)
     rewards = jnp.asarray(rewards) # (T+1, B)
 
-    # DEBUG: Print input shapes to compute_gae
-    print(f"[DEBUG prepare_data] Before compute_gae:")
-    print(f"  rewards.shape: {rewards.shape}")
-    print(f"  values.shape: {values.shape}")
-    print(f"  dones.shape: {dones.shape}")
-    
     advantages, returns = compute_gae(rewards, values, dones, gamma, lambda_)  # (T, B) each
-    
-    # DEBUG: Print shapes after compute_gae
-    print(f"[DEBUG prepare_data] After compute_gae:")
-    print(f"  advantages.shape: {advantages.shape}")
-    print(f"  returns.shape: {returns.shape}")
 
     # Extract first T steps (exclude the bootstrap value at T+1)
     T = obs.shape[0] - 1  # Explicit extraction instead of relying on global args
@@ -685,9 +674,7 @@ if __name__ == "__main__":
     rollout_queue_get_time = deque(maxlen=10)
     data_transfer_time = deque(maxlen=10)
     learner_policy_version = 0
-    # TEMPORARILY DISABLE JIT TO DEBUG SHAPES:
-    # prepare_data = jax.jit(prepare_data, device=learner_devices[0])
-    prepare_data_fn = prepare_data  # Use non-jitted version for now
+    prepare_data = jax.jit(prepare_data, device=learner_devices[0])
     while True:
         learner_policy_version += 1
         if learner_policy_version == 1 or not args.test_actor_learner_throughput:
@@ -707,7 +694,7 @@ if __name__ == "__main__":
             writer.add_scalar("stats/rollout_queue_get_time", np.mean(rollout_queue_get_time), global_step)
 
         data_transfer_time_start = time.time()
-        b_obs, b_actions, b_logprobs, b_advantages, b_returns = prepare_data_fn(
+        b_obs, b_actions, b_logprobs, b_advantages, b_returns = prepare_data(
             obs,
             dones,
             values,
@@ -720,17 +707,6 @@ if __name__ == "__main__":
         
         data_transfer_time.append(time.time() - data_transfer_time_start)
         writer.add_scalar("stats/data_transfer_time", np.mean(data_transfer_time), global_step)
-
-        # Debug: Print batch shapes before training
-        if learner_policy_version == 1:
-            print(f"\n[DEBUG] Batch shapes before training:")
-            print(f"  b_obs: {b_obs.shape}")
-            print(f"  b_actions: {b_actions.shape}")
-            print(f"  b_logprobs: {b_logprobs.shape}")
-            print(f"  b_advantages: {b_advantages.shape}")
-            print(f"  b_returns: {b_returns.shape}")
-            print(f"  args.num_minibatches: {args.num_minibatches}")
-            print(f"  Minibatch size: {b_obs.shape[0] // args.num_minibatches}\n")
 
         training_time_start = time.time()
         (agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key) = multi_device_update(
@@ -758,11 +734,22 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         writer.add_scalar("charts/learning_rate", agent_state.opt_state[1].hyperparams["learning_rate"][0].item(), global_step)
-        writer.add_scalar("losses/value_loss", v_loss[-1, -1, -1].item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss[-1, -1, -1].item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss[-1, -1, -1].item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl[-1, -1, -1].item(), global_step)
-        writer.add_scalar("losses/loss", loss[-1, -1, -1].item(), global_step)
+        
+        # Handle different shapes for single-device vs multi-device
+        if len(learner_devices) == 1:
+            # Single-device: v_loss shape is (update_epochs, num_minibatches)
+            writer.add_scalar("losses/value_loss", v_loss[-1, -1].item(), global_step)
+            writer.add_scalar("losses/policy_loss", pg_loss[-1, -1].item(), global_step)
+            writer.add_scalar("losses/entropy", entropy_loss[-1, -1].item(), global_step)
+            writer.add_scalar("losses/approx_kl", approx_kl[-1, -1].item(), global_step)
+            writer.add_scalar("losses/loss", loss[-1, -1].item(), global_step)
+        else:
+            # Multi-device: v_loss shape is (num_devices, update_epochs, num_minibatches)
+            writer.add_scalar("losses/value_loss", v_loss[-1, -1, -1].item(), global_step)
+            writer.add_scalar("losses/policy_loss", pg_loss[-1, -1, -1].item(), global_step)
+            writer.add_scalar("losses/entropy", entropy_loss[-1, -1, -1].item(), global_step)
+            writer.add_scalar("losses/approx_kl", approx_kl[-1, -1, -1].item(), global_step)
+            writer.add_scalar("losses/loss", loss[-1, -1, -1].item(), global_step)
         if update >= args.num_updates:
             break
 
