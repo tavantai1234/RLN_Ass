@@ -211,7 +211,7 @@ def get_action_and_value(
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
     logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
     value = Critic().apply(params["critic_params"], hidden)
-    return next_obs, action, logprob, value.squeeze(), key
+    return next_obs, action, logprob, value.squeeze(-1), key
 
 
 def prepare_data(
@@ -225,19 +225,30 @@ def prepare_data(
     lambda_: float = 0.95,
 ):
     # With SyncVectorEnv all envs step in lockstep, so data is already aligned.
-    # shapes after stacking: (num_steps+1, num_envs, 84, 84, 4) — NHWC format, no env_id reordering needed.
-    obs = jnp.asarray(obs)         # (T+1, B, 84, 84, 4)
+    # shapes after stacking: (num_steps+1, num_envs, 4, 84, 84) — NCHW format
+    obs = jnp.asarray(obs)         # (T+1, B, 4, 84, 84)
     dones = jnp.asarray(dones)     # (T+1, B)
     values = jnp.asarray(values)   # (T+1, B)
     actions = jnp.asarray(actions) # (T+1, B)
     logprobs = jnp.asarray(logprobs) # (T+1, B)
     rewards = jnp.asarray(rewards) # (T+1, B)
 
+    # DEBUG: Print input shapes to compute_gae
+    print(f"[DEBUG prepare_data] Before compute_gae:")
+    print(f"  rewards.shape: {rewards.shape}")
+    print(f"  values.shape: {values.shape}")
+    print(f"  dones.shape: {dones.shape}")
+    
     advantages, returns = compute_gae(rewards, values, dones, gamma, lambda_)  # (T, B) each
+    
+    # DEBUG: Print shapes after compute_gae
+    print(f"[DEBUG prepare_data] After compute_gae:")
+    print(f"  advantages.shape: {advantages.shape}")
+    print(f"  returns.shape: {returns.shape}")
 
     # Extract first T steps (exclude the bootstrap value at T+1)
     T = obs.shape[0] - 1  # Explicit extraction instead of relying on global args
-    b_obs = obs[:T].reshape((-1,) + obs.shape[2:])   # (T*B, 84, 84, 4)
+    b_obs = obs[:T].reshape((-1,) + obs.shape[2:])   # (T*B, 4, 84, 84)
     b_actions = actions[:T].reshape(-1)               # (T*B,)
     b_logprobs = logprobs[:T].reshape(-1)             # (T*B,)
     b_advantages = advantages.reshape(-1)             # (T*B,)
@@ -674,7 +685,9 @@ if __name__ == "__main__":
     rollout_queue_get_time = deque(maxlen=10)
     data_transfer_time = deque(maxlen=10)
     learner_policy_version = 0
-    prepare_data = jax.jit(prepare_data, device=learner_devices[0])
+    # TEMPORARILY DISABLE JIT TO DEBUG SHAPES:
+    # prepare_data = jax.jit(prepare_data, device=learner_devices[0])
+    prepare_data_fn = prepare_data  # Use non-jitted version for now
     while True:
         learner_policy_version += 1
         if learner_policy_version == 1 or not args.test_actor_learner_throughput:
@@ -694,7 +707,7 @@ if __name__ == "__main__":
             writer.add_scalar("stats/rollout_queue_get_time", np.mean(rollout_queue_get_time), global_step)
 
         data_transfer_time_start = time.time()
-        b_obs, b_actions, b_logprobs, b_advantages, b_returns = prepare_data(
+        b_obs, b_actions, b_logprobs, b_advantages, b_returns = prepare_data_fn(
             obs,
             dones,
             values,
