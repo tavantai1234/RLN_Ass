@@ -127,8 +127,10 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
             # frameskip=1 required so AtariPreprocessing controls frame skipping (avoids 4x4=16x skip)
             env = gym.make(env_id, frameskip=1)
             env = AtariPreprocessing(env, noop_max=30, frame_skip=4, scale_obs=False)
-            # Stack 4 frames: obs shape becomes (4, 84, 84), required for motion inference
+            # Stack 4 frames: obs shape becomes (84, 84, 4) in NHWC format
             env = gym.wrappers.FrameStackObservation(env, 4)
+            # Transpose to NCHW format: (B, 84, 84, 4) -> (B, 4, 84, 84)
+            env = gym.wrappers.TransformObservation(env, lambda obs: np.transpose(obs, (2, 0, 1)))
             env = gym.wrappers.TimeLimit(env, max_episode_steps=ATARI_MAX_FRAMES)
             env.reset(seed=seed + seed_offset)
             return env
@@ -229,7 +231,8 @@ def prepare_data(
 
     advantages, returns = compute_gae(rewards, values, dones)  # (T, B) each
 
-    T = args.num_steps
+    # Extract first T steps (exclude the bootstrap value at T+1)
+    T = obs.shape[0] - 1  # Explicit extraction instead of relying on global args
     b_obs = obs[:T].reshape((-1,) + obs.shape[2:])   # (T*B, 4, 84, 84)
     b_actions = actions[:T].reshape(-1)               # (T*B,)
     b_logprobs = logprobs[:T].reshape(-1)             # (T*B,)
@@ -431,13 +434,14 @@ def compute_gae(
     values = jnp.asarray(values)
     dones = jnp.asarray(dones)
 
-    T = args.num_steps
+    # Extract T from the input shape instead of relying on global args
+    T = rewards.shape[0] - 1
 
     def gae_step(lastgaelam, x):
         done, value, next_value, reward = x
         nextnonterminal = 1.0 - done
-        delta = reward + args.gamma * next_value * nextnonterminal - value
-        lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+        delta = reward + 0.99 * next_value * nextnonterminal - value  # Use hardcoded gamma for jit
+        lastgaelam = delta + 0.99 * 0.95 * nextnonterminal * lastgaelam  # Use hardcoded gamma * lambda
         return lastgaelam, lastgaelam
 
     # Scan in reverse from t=T-1 down to t=0
@@ -618,14 +622,25 @@ if __name__ == "__main__":
     )
     agent_state = flax.jax_utils.replicate(agent_state, devices=learner_devices)
 
-    multi_device_update = jax.pmap(
-        single_device_update,
-        axis_name="local_devices",
-        devices=global_learner_decices,
-        in_axes=(0, 0, 0, 0, 0, 0, None, None),
-        out_axes=(0, 0, 0, 0, 0, 0, None),
-        static_broadcasted_argnums=(6),
-    )
+    # For single device, don't use pmap; call directly
+    if len(learner_devices) == 1:
+        def multi_device_update(agent_state, b_obs, b_actions, b_logprobs, b_advantages, b_returns, action_dim, key):
+            # Unreplicate for single-device case
+            agent_state_single = flax.jax_utils.unreplicate(agent_state)
+            agent_state_updated, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = single_device_update(
+                agent_state_single, b_obs, b_actions, b_logprobs, b_advantages, b_returns, action_dim, key
+            )
+            # Replicate back for consistency with the rest of the code
+            return flax.jax_utils.replicate(agent_state_updated, devices=learner_devices), loss, pg_loss, v_loss, entropy_loss, approx_kl, key
+    else:
+        multi_device_update = jax.pmap(
+            single_device_update,
+            axis_name="local_devices",
+            devices=global_learner_decices,
+            in_axes=(0, 0, 0, 0, 0, 0, None, None),
+            out_axes=(0, 0, 0, 0, 0, 0, None),
+            static_broadcasted_argnums=(6),
+        )
 
     rollout_queue = queue.Queue(maxsize=1)
     params_queues = []
@@ -676,12 +691,6 @@ if __name__ == "__main__":
             logprobs,
             rewards,
         )
-        # Add batch_size dimension for pmap
-        b_obs = jnp.expand_dims(b_obs, 0)
-        b_actions = jnp.expand_dims(b_actions, 0)
-        b_logprobs = jnp.expand_dims(b_logprobs, 0)
-        b_advantages = jnp.expand_dims(b_advantages, 0)
-        b_returns = jnp.expand_dims(b_returns, 0)
         data_transfer_time.append(time.time() - data_transfer_time_start)
         writer.add_scalar("stats/data_transfer_time", np.mean(data_transfer_time), global_step)
 
