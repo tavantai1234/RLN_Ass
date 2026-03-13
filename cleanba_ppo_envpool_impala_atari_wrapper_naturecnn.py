@@ -243,6 +243,7 @@ def prepare_data(
     b_advantages = advantages.reshape(-1)             # (T*B,)
     b_returns = returns.reshape(-1)                   # (T*B,)
     return b_obs, b_actions, b_logprobs, b_advantages, b_returns
+    
 
 
 def rollout(
@@ -489,7 +490,7 @@ def ppo_loss(params, x, a, logp, mb_advantages, mb_returns, action_dim):
     return loss, (pg_loss, v_loss, entropy_loss, jax.lax.stop_gradient(approx_kl))
 
 
-@partial(jax.jit, static_argnums=(6))
+@partial(jax.jit, static_argnums=(6, 7))
 def single_device_update(
     agent_state: TrainState,
     b_obs,
@@ -498,6 +499,7 @@ def single_device_update(
     b_advantages,
     b_returns,
     action_dim,
+    num_minibatches,
     key: jax.random.PRNGKey,
 ):
     ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
@@ -509,7 +511,8 @@ def single_device_update(
         # taken from: https://github.com/google/brax/blob/main/brax/training/agents/ppo/train.py
         def convert_data(x: jnp.ndarray):
             x = jax.random.permutation(subkey, x)
-            x = jnp.reshape(x, (args.num_minibatches, -1) + x.shape[1:])
+            # Compute minibatch size from actual input and number of minibatches
+            x = jnp.reshape(x, (num_minibatches, -1) + x.shape[1:])
             return x
 
         def update_minibatch(agent_state, minibatch):
@@ -634,8 +637,9 @@ if __name__ == "__main__":
         def multi_device_update(agent_state, b_obs, b_actions, b_logprobs, b_advantages, b_returns, action_dim, key):
             # Unreplicate for single-device case
             agent_state_single = flax.jax_utils.unreplicate(agent_state)
+            num_minibatches = args.num_minibatches
             agent_state_updated, loss, pg_loss, v_loss, entropy_loss, approx_kl, key = single_device_update(
-                agent_state_single, b_obs, b_actions, b_logprobs, b_advantages, b_returns, action_dim, key
+                agent_state_single, b_obs, b_actions, b_logprobs, b_advantages, b_returns, action_dim, num_minibatches, key
             )
             # Replicate back for consistency with the rest of the code
             return flax.jax_utils.replicate(agent_state_updated, devices=learner_devices), loss, pg_loss, v_loss, entropy_loss, approx_kl, key
@@ -644,9 +648,9 @@ if __name__ == "__main__":
             single_device_update,
             axis_name="local_devices",
             devices=global_learner_decices,
-            in_axes=(0, 0, 0, 0, 0, 0, None, None),
+            in_axes=(0, 0, 0, 0, 0, 0, None, None, None),
             out_axes=(0, 0, 0, 0, 0, 0, None),
-            static_broadcasted_argnums=(6),
+            static_broadcasted_argnums=(6, 7),
         )
 
     rollout_queue = queue.Queue(maxsize=1)
@@ -700,8 +704,20 @@ if __name__ == "__main__":
             args.gamma,
             args.gae_lambda,
         )
+        
         data_transfer_time.append(time.time() - data_transfer_time_start)
         writer.add_scalar("stats/data_transfer_time", np.mean(data_transfer_time), global_step)
+
+        # Debug: Print batch shapes before training
+        if learner_policy_version == 1:
+            print(f"\n[DEBUG] Batch shapes before training:")
+            print(f"  b_obs: {b_obs.shape}")
+            print(f"  b_actions: {b_actions.shape}")
+            print(f"  b_logprobs: {b_logprobs.shape}")
+            print(f"  b_advantages: {b_advantages.shape}")
+            print(f"  b_returns: {b_returns.shape}")
+            print(f"  args.num_minibatches: {args.num_minibatches}")
+            print(f"  Minibatch size: {b_obs.shape[0] // args.num_minibatches}\n")
 
         training_time_start = time.time()
         (agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key) = multi_device_update(
