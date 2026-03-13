@@ -190,30 +190,23 @@ class Actor(nn.Module):
         return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
 
 
-@flax.struct.dataclass
-class AgentParams:
-    network_params: flax.core.FrozenDict
-    actor_params: flax.core.FrozenDict
-    critic_params: flax.core.FrozenDict
-
-
 @partial(jax.jit, static_argnums=(3))
 def get_action_and_value(
-    params: TrainState,
+    params: flax.core.FrozenDict,
     next_obs: np.ndarray,
     key: jax.random.PRNGKey,
     action_dim: int,
 ):
     next_obs = jnp.array(next_obs)
-    hidden = Network().apply(params.network_params, next_obs)
-    logits = Actor(action_dim).apply(params.actor_params, hidden)
+    hidden = Network().apply(params["network_params"], next_obs)
+    logits = Actor(action_dim).apply(params["actor_params"], hidden)
     # sample action: Gumbel-softmax trick
     # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
     key, subkey = jax.random.split(key)
     u = jax.random.uniform(subkey, shape=logits.shape)
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
     logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
-    value = Critic().apply(params.critic_params, hidden)
+    value = Critic().apply(params["critic_params"], hidden)
     return next_obs, action, logprob, value.squeeze(), key
 
 
@@ -397,14 +390,14 @@ def rollout(
 
 @partial(jax.jit, static_argnums=(2))
 def get_action_deterministic(
-    params: AgentParams,
+    params: flax.core.FrozenDict,
     obs: np.ndarray,
     action_dim: int,
 ):
     """Deterministic greedy policy for evaluation — picks argmax(logits)."""
     obs = jnp.array(obs)
-    hidden = Network().apply(params.network_params, obs)
-    logits = Actor(action_dim).apply(params.actor_params, hidden)
+    hidden = Network().apply(params["network_params"], obs)
+    logits = Actor(action_dim).apply(params["actor_params"], hidden)
     return jnp.argmax(logits, axis=1)
 
 
@@ -415,14 +408,14 @@ def get_action_and_value2(
     action: np.ndarray,
     action_dim: int,
 ):
-    hidden = Network().apply(params.network_params, x)
-    logits = Actor(action_dim).apply(params.actor_params, hidden)
+    hidden = Network().apply(params["network_params"], x)
+    logits = Actor(action_dim).apply(params["actor_params"], hidden)
     logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
     logits = logits - jax.scipy.special.logsumexp(logits, axis=-1, keepdims=True)
     logits = logits.clip(min=jnp.finfo(logits.dtype).min)
     p_log_p = logits * jax.nn.softmax(logits)
     entropy = -p_log_p.sum(-1)
-    value = Critic().apply(params.critic_params, hidden).squeeze()
+    value = Critic().apply(params["critic_params"], hidden).squeeze()
     return logprob, entropy, value
 
 
@@ -611,11 +604,11 @@ if __name__ == "__main__":
     network_params = network.init(network_key, np.array([envs.single_observation_space.sample()]))
     agent_state = TrainState.create(
         apply_fn=None,
-        params=AgentParams(
-            network_params,
-            actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-            critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-        ),
+        params=flax.core.FrozenDict({
+            'network_params': network_params,
+            'actor_params': actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+            'critic_params': critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+        }),
         tx=optax.chain(
             optax.clip_by_global_norm(args.max_grad_norm),
             optax.inject_hyperparams(optax.adam)(
@@ -736,9 +729,9 @@ if __name__ == "__main__":
                     [
                         vars(args),
                         [
-                            agent_state.params.network_params,
-                            agent_state.params.actor_params,
-                            agent_state.params.critic_params,
+                            agent_state.params["network_params"],
+                            agent_state.params["actor_params"],
+                            agent_state.params["critic_params"],
                         ],
                     ]
                 )
