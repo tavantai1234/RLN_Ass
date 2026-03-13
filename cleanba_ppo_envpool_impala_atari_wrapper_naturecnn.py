@@ -220,6 +220,8 @@ def prepare_data(
     actions: list,
     logprobs: list,
     rewards: list,
+    gamma: float = 0.99,
+    lambda_: float = 0.95,
 ):
     # With SyncVectorEnv all envs step in lockstep, so data is already aligned.
     # shapes after stacking: (num_steps+1, num_envs, 84, 84, 4) — NHWC format, no env_id reordering needed.
@@ -230,7 +232,7 @@ def prepare_data(
     logprobs = jnp.asarray(logprobs) # (T+1, B)
     rewards = jnp.asarray(rewards) # (T+1, B)
 
-    advantages, returns = compute_gae(rewards, values, dones)  # (T, B) each
+    advantages, returns = compute_gae(rewards, values, dones, gamma, lambda_)  # (T, B) each
 
     # Extract first T steps (exclude the bootstrap value at T+1)
     T = obs.shape[0] - 1  # Explicit extraction instead of relying on global args
@@ -428,6 +430,8 @@ def compute_gae(
     rewards: np.ndarray,
     values: np.ndarray,
     dones: np.ndarray,
+    gamma: float = 0.99,
+    lambda_: float = 0.95,
 ):
     # All inputs shape: (T+1, B) where T = num_steps
     # Compute advantages for steps 0..T-1; step T provides bootstrap value only.
@@ -441,8 +445,8 @@ def compute_gae(
     def gae_step(lastgaelam, x):
         done, value, next_value, reward = x
         nextnonterminal = 1.0 - done
-        delta = reward + 0.99 * next_value * nextnonterminal - value  # Use hardcoded gamma for jit
-        lastgaelam = delta + 0.99 * 0.95 * nextnonterminal * lastgaelam  # Use hardcoded gamma * lambda
+        delta = reward + gamma * next_value * nextnonterminal - value
+        lastgaelam = delta + gamma * lambda_ * nextnonterminal * lastgaelam
         return lastgaelam, lastgaelam
 
     # Scan in reverse from t=T-1 down to t=0
@@ -516,7 +520,6 @@ def single_device_update(
                 mb_returns,
                 action_dim,
             )
-            grads = jax.lax.pmean(grads, axis_name="local_devices")
             agent_state = agent_state.apply_gradients(grads=grads)
             return agent_state, (loss, pg_loss, v_loss, entropy_loss, approx_kl, grads)
 
@@ -691,6 +694,8 @@ if __name__ == "__main__":
             actions,
             logprobs,
             rewards,
+            args.gamma,
+            args.gae_lambda,
         )
         data_transfer_time.append(time.time() - data_transfer_time_start)
         writer.add_scalar("stats/data_transfer_time", np.mean(data_transfer_time), global_step)
