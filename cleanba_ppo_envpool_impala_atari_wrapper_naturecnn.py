@@ -18,7 +18,6 @@ import threading
 import flax
 import flax.linen as nn
 import gymnasium as gym
-from gymnasium.spaces import Box
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -121,6 +120,7 @@ ATARI_MAX_FRAMES = int(
 def make_env(env_id, seed, num_envs, async_batch_size=None):
     """
     Create a vectorized environment using Gymnasium SyncVectorEnv.
+    Produces observations in NHWC format (B, 84, 84, 4).
     async_batch_size is ignored (kept for API compatibility).
     """
     def make_single_env(seed_offset):
@@ -129,13 +129,8 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
             env = gym.make(env_id, frameskip=1)
             env = AtariPreprocessing(env, noop_max=30, frame_skip=4, scale_obs=False)
             # Stack 4 frames: obs shape becomes (84, 84, 4) in NHWC format
+            # Flax Conv expects NHWC by default
             env = gym.wrappers.FrameStackObservation(env, 4)
-            # Transpose to NCHW format: (B, 84, 84, 4) -> (B, 4, 84, 84)
-            env = gym.wrappers.TransformObservation(
-                env, 
-                lambda obs: np.transpose(obs, (2, 0, 1)),
-                observation_space=Box(low=0, high=255, shape=(4, 84, 84), dtype=np.uint8)
-            )
             env = gym.wrappers.TimeLimit(env, max_episode_steps=ATARI_MAX_FRAMES)
             env.reset(seed=seed + seed_offset)
             return env
@@ -148,7 +143,8 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
 class Network(nn.Module):
     @nn.compact
     def __call__(self, x):
-        x = jnp.transpose(x, (0, 2, 3, 1))
+        # Input x is (B, 84, 84, 4) in NHWC format from FrameStackObservation
+        # Flax Conv uses channels-last (NHWC) format by default
         x = x / (255.0)
         x = nn.Conv(
             32,
@@ -226,8 +222,8 @@ def prepare_data(
     rewards: list,
 ):
     # With SyncVectorEnv all envs step in lockstep, so data is already aligned.
-    # shapes after stacking: (num_steps+1, num_envs, ...) — no env_id reordering needed.
-    obs = jnp.asarray(obs)         # (T+1, B, 4, 84, 84)
+    # shapes after stacking: (num_steps+1, num_envs, 84, 84, 4) — NHWC format, no env_id reordering needed.
+    obs = jnp.asarray(obs)         # (T+1, B, 84, 84, 4)
     dones = jnp.asarray(dones)     # (T+1, B)
     values = jnp.asarray(values)   # (T+1, B)
     actions = jnp.asarray(actions) # (T+1, B)
@@ -238,7 +234,7 @@ def prepare_data(
 
     # Extract first T steps (exclude the bootstrap value at T+1)
     T = obs.shape[0] - 1  # Explicit extraction instead of relying on global args
-    b_obs = obs[:T].reshape((-1,) + obs.shape[2:])   # (T*B, 4, 84, 84)
+    b_obs = obs[:T].reshape((-1,) + obs.shape[2:])   # (T*B, 84, 84, 4)
     b_actions = actions[:T].reshape(-1)               # (T*B,)
     b_logprobs = logprobs[:T].reshape(-1)             # (T*B,)
     b_advantages = advantages.reshape(-1)             # (T*B,)
@@ -267,10 +263,10 @@ def rollout(
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     next_obs, _ = envs.reset()
     next_obs = np.asarray(next_obs)  # materialise LazyFrames → contiguous np.ndarray
-    # Verify observation shape is (B, 4, 84, 84); axis-1 must be the stack dimension
-    assert next_obs.shape[1] == 4, (
-        f"Expected 4 stacked frames at axis 1 (NCHW), got {next_obs.shape}. "
-        "If shape is (B,84,84,4) remove jnp.transpose in Network or reorder FrameStack output."
+    # Verify observation shape is (B, 84, 84, 4); NHWC format from FrameStackObservation
+    assert next_obs.shape[-1] == 4, (
+        f"Expected 4 stacked frames at last axis (NHWC), got {next_obs.shape}. "
+        "FrameStackObservation should produce (B, 84, 84, 4) format."
     )
 
     params_queue_get_time = deque(maxlen=10)
