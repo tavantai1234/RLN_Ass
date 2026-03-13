@@ -213,7 +213,7 @@ def get_action_and_value(
     u = jax.random.uniform(subkey, shape=logits.shape)
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
     logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
-    value = Critic().apply(params["critic"], hidden)
+    value  = Critic().apply(params["critic"], hidden)
     return next_obs, action, logprob, value.squeeze(), key
 
 
@@ -613,8 +613,8 @@ if __name__ == "__main__":
         apply_fn=None,
         params={
             "network": network_params,
-            "actor": actor_params,
-            "critic": critic_params,
+            "actor": actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+            "critic": critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
         },
         tx=optax.chain(
             optax.clip_by_global_norm(args.max_grad_norm),
