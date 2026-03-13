@@ -205,15 +205,15 @@ def get_action_and_value(
     action_dim: int,
 ):
     next_obs = jnp.array(next_obs)
-    hidden = Network().apply(params.network_params, next_obs)
-    logits = Actor(action_dim).apply(params.actor_params, hidden)
+    hidden = Network().apply(params["network"], next_obs)
+    logits = Actor(action_dim).apply(params["actor"], hidden)
     # sample action: Gumbel-softmax trick
     # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
     key, subkey = jax.random.split(key)
     u = jax.random.uniform(subkey, shape=logits.shape)
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
     logprob = jax.nn.log_softmax(logits)[jnp.arange(action.shape[0]), action]
-    value = Critic().apply(params.critic_params, hidden)
+    value = Critic().apply(params["critic"], hidden)
     return next_obs, action, logprob, value.squeeze(), key
 
 
@@ -611,11 +611,11 @@ if __name__ == "__main__":
     network_params = network.init(network_key, np.array([envs.single_observation_space.sample()]))
     agent_state = TrainState.create(
         apply_fn=None,
-        params=AgentParams(
-            network_params,
-            actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-            critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-        ),
+        params={
+            "network": network_params,
+            "actor": actor_params,
+            "critic": critic_params,
+        },
         tx=optax.chain(
             optax.clip_by_global_norm(args.max_grad_norm),
             optax.inject_hyperparams(optax.adam)(
