@@ -18,6 +18,7 @@ import threading
 import flax
 import flax.linen as nn
 import gymnasium as gym
+from gymnasium.spaces import Box
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -130,7 +131,11 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
             # Stack 4 frames: obs shape becomes (84, 84, 4) in NHWC format
             env = gym.wrappers.FrameStackObservation(env, 4)
             # Transpose to NCHW format: (B, 84, 84, 4) -> (B, 4, 84, 84)
-            env = gym.wrappers.TransformObservation(env, lambda obs: np.transpose(obs, (2, 0, 1)))
+            env = gym.wrappers.TransformObservation(
+                env, 
+                lambda obs: np.transpose(obs, (2, 0, 1)),
+                observation_space=Box(low=0, high=255, shape=(4, 84, 84), dtype=np.uint8)
+            )
             env = gym.wrappers.TimeLimit(env, max_episode_steps=ATARI_MAX_FRAMES)
             env.reset(seed=seed + seed_offset)
             return env
