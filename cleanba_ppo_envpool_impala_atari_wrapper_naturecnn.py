@@ -128,7 +128,7 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
             env = gym.make(env_id, frameskip=1)
             env = AtariPreprocessing(env, noop_max=30, frame_skip=4, scale_obs=False)
             # Stack 4 frames: obs shape becomes (4, 84, 84), required for motion inference
-            env = gym.wrappers.FrameStack(env, 4)
+            env = gym.wrappers.FrameStackObservation(env, 4)
             env = gym.wrappers.TimeLimit(env, max_episode_steps=ATARI_MAX_FRAMES)
             env.reset(seed=seed + seed_offset)
             return env
