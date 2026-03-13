@@ -265,10 +265,13 @@ def rollout(
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     next_obs, _ = envs.reset()
     next_obs = np.asarray(next_obs)  # materialise LazyFrames → contiguous np.ndarray
-    # Verify observation shape is (B, 84, 84, 4); NHWC format from FrameStackObservation
+    # Transpose from NCHW (B, C, H, W) to NHWC (B, H, W, C) if needed
+    if next_obs.shape[1] == 4 and next_obs.ndim == 4:
+        next_obs = np.transpose(next_obs, (0, 2, 3, 1))  # (B, C, H, W) -> (B, H, W, C)
+    # Verify observation shape is (B, 84, 84, 4); NHWC format
     assert next_obs.shape[-1] == 4, (
         f"Expected 4 stacked frames at last axis (NHWC), got {next_obs.shape}. "
-        "FrameStackObservation should produce (B, 84, 84, 4) format."
+        "After transpose, should be (B, 84, 84, 4) format."
     )
 
     params_queue_get_time = deque(maxlen=10)
@@ -317,6 +320,10 @@ def rollout(
 
             env_send_time_start = time.time()
             next_obs, reward, terminated, truncated, info = envs.step(np.array(action))
+            # Transpose from NCHW (B, C, H, W) to NHWC (B, H, W, C) if needed
+            next_obs = np.asarray(next_obs)
+            if next_obs.shape[1] == 4 and next_obs.ndim == 4:
+                next_obs = np.transpose(next_obs, (0, 2, 3, 1))  # (B, C, H, W) -> (B, H, W, C)
             env_send_time += time.time() - env_send_time_start
 
             env_recv_time += time.time() - env_recv_time_start
