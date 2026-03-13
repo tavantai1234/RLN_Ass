@@ -143,8 +143,9 @@ def make_env(env_id, seed, num_envs, async_batch_size=None):
 class Network(nn.Module):
     @nn.compact
     def __call__(self, x):
-        # Input x is (B, 84, 84, 4) in NHWC format from FrameStackObservation
-        # Flax Conv uses channels-last (NHWC) format by default
+        # Input x is (B, 4, 84, 84) in NCHW format from FrameStackObservation
+        # Transpose to NHWC (B, 84, 84, 4) for Flax Conv, which uses channels-last by default
+        x = jnp.transpose(x, (0, 2, 3, 1))  # (B, C, H, W) -> (B, H, W, C)
         x = x / (255.0)
         x = nn.Conv(
             32,
@@ -265,13 +266,11 @@ def rollout(
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     next_obs, _ = envs.reset()
     next_obs = np.asarray(next_obs)  # materialise LazyFrames → contiguous np.ndarray
-    # Transpose from NCHW (B, C, H, W) to NHWC (B, H, W, C) if needed
-    if next_obs.shape[1] == 4 and next_obs.ndim == 4:
-        next_obs = np.transpose(next_obs, (0, 2, 3, 1))  # (B, C, H, W) -> (B, H, W, C)
-    # Verify observation shape is (B, 84, 84, 4); NHWC format
-    assert next_obs.shape[-1] == 4, (
-        f"Expected 4 stacked frames at last axis (NHWC), got {next_obs.shape}. "
-        "After transpose, should be (B, 84, 84, 4) format."
+    # Verify observation shape is (B, 4, 84, 84); NCHW format from FrameStackObservation
+    # Network will transpose to NHWC internally
+    assert next_obs.shape[1] == 4, (
+        f"Expected 4 stacked frames at axis 1 (NCHW), got {next_obs.shape}. "
+        "FrameStackObservation should produce (B, 4, 84, 84) format."
     )
 
     params_queue_get_time = deque(maxlen=10)
@@ -320,10 +319,7 @@ def rollout(
 
             env_send_time_start = time.time()
             next_obs, reward, terminated, truncated, info = envs.step(np.array(action))
-            # Transpose from NCHW (B, C, H, W) to NHWC (B, H, W, C) if needed
-            next_obs = np.asarray(next_obs)
-            if next_obs.shape[1] == 4 and next_obs.ndim == 4:
-                next_obs = np.transpose(next_obs, (0, 2, 3, 1))  # (B, C, H, W) -> (B, H, W, C)
+            next_obs = np.asarray(next_obs)  # materialise LazyFrames
             env_send_time += time.time() - env_send_time_start
 
             env_recv_time += time.time() - env_recv_time_start
