@@ -612,9 +612,9 @@ if __name__ == "__main__":
     agent_state = TrainState.create(
         apply_fn=None,
         params={
-            "network": network_params,
-            "actor": actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-            "critic": critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+        "network": network_params,
+        "actor": actor_params,
+        "critic": critic_params,
         },
         tx=optax.chain(
             optax.clip_by_global_norm(args.max_grad_norm),
