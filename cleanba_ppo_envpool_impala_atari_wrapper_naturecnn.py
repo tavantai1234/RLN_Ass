@@ -7,6 +7,7 @@ from collections import deque
 from distutils.util import strtobool
 from functools import partial
 
+
 os.environ[
     "XLA_PYTHON_CLIENT_MEM_FRACTION"
 ] = "0.6"  # see https://github.com/google/jax/discussions/6332#discussioncomment-1279991
@@ -26,7 +27,7 @@ from flax.training.train_state import TrainState
 from tensorboardX import SummaryWriter
 from gymnasium.vector import SyncVectorEnv
 from gymnasium.wrappers import AtariPreprocessing
-
+import ale_py
 
 def parse_args():
     # fmt: off
