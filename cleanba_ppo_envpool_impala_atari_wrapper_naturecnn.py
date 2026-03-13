@@ -676,22 +676,23 @@ if __name__ == "__main__":
             logprobs,
             rewards,
         )
-        b_obs = jnp.array_split(b_obs, len(learner_devices))
-        b_actions = jnp.array_split(b_actions, len(learner_devices))
-        b_logprobs = jnp.array_split(b_logprobs, len(learner_devices))
-        b_advantages = jnp.array_split(b_advantages, len(learner_devices))
-        b_returns = jnp.array_split(b_returns, len(learner_devices))
+        # Add batch_size dimension for pmap
+        b_obs = jnp.expand_dims(b_obs, 0)
+        b_actions = jnp.expand_dims(b_actions, 0)
+        b_logprobs = jnp.expand_dims(b_logprobs, 0)
+        b_advantages = jnp.expand_dims(b_advantages, 0)
+        b_returns = jnp.expand_dims(b_returns, 0)
         data_transfer_time.append(time.time() - data_transfer_time_start)
         writer.add_scalar("stats/data_transfer_time", np.mean(data_transfer_time), global_step)
 
         training_time_start = time.time()
         (agent_state, loss, pg_loss, v_loss, entropy_loss, approx_kl, key) = multi_device_update(
             agent_state,
-            jax.device_put_sharded(b_obs, learner_devices),
-            jax.device_put_sharded(b_actions, learner_devices),
-            jax.device_put_sharded(b_logprobs, learner_devices),
-            jax.device_put_sharded(b_advantages, learner_devices),
-            jax.device_put_sharded(b_returns, learner_devices),
+            b_obs,
+            b_actions,
+            b_logprobs,
+            b_advantages,
+            b_returns,
             envs.single_action_space.n,
             key,
         )
