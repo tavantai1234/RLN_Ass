@@ -45,7 +45,9 @@ class Actor(nn.Module):
     def __call__(self, x):
         return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
 
-@jax.jit
+from functools import partial
+
+@partial(jax.jit, static_argnums=(2,))
 def act(params, obs, action_dim: int):
     obs = jnp.asarray(obs)
     h = Network().apply(params["network_params"], obs)
@@ -64,6 +66,25 @@ def main():
         payload = flax.serialization.from_bytes(None, f.read())
     # payload structure you saved: [vars(args), [network_params, actor_params, critic_params]]
     saved_hparams, (network_params, actor_params, critic_params) = payload
+    saved_hparams, blob = payload
+
+# Case 1: blob is (network_params, actor_params, critic_params)
+    if isinstance(blob, (list, tuple)) and len(blob) == 3:
+        network_params, actor_params, critic_params = blob
+
+    # Case 2: blob is [FrozenDict({...})]  (a list with 1 element)
+    elif isinstance(blob, (list, tuple)) and len(blob) == 1:
+        blob = blob[0]
+        network_params = blob["network_params"]
+        actor_params   = blob["actor_params"]
+        critic_params  = blob["critic_params"]
+
+    # Case 3: blob is FrozenDict({...})
+    else:
+        network_params = blob["network_params"]
+        actor_params   = blob["actor_params"]
+        critic_params  = blob["critic_params"]
+
     params = flax.core.FrozenDict({
         "network_params": network_params,
         "actor_params": actor_params,
