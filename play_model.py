@@ -64,20 +64,26 @@ def main():
 
     with open(args.model_path, "rb") as f:
         payload = flax.serialization.from_bytes(None, f.read())
-    # payload structure you saved: [vars(args), [network_params, actor_params, critic_params]]
-    saved_hparams, (network_params, actor_params, critic_params) = payload
+
+    # Debug (optional but helpful)
+    print("payload type:", type(payload))
+    try:
+        print("payload len:", len(payload))
+    except Exception as e:
+        print("payload len error:", e)
+
     saved_hparams, blob = payload
 
-# Case 1: blob is (network_params, actor_params, critic_params)
+    # Case 1: blob is (network_params, actor_params, critic_params)
     if isinstance(blob, (list, tuple)) and len(blob) == 3:
         network_params, actor_params, critic_params = blob
 
     # Case 2: blob is [FrozenDict({...})]  (a list with 1 element)
     elif isinstance(blob, (list, tuple)) and len(blob) == 1:
-        blob = blob[0]
-        network_params = blob["network_params"]
-        actor_params   = blob["actor_params"]
-        critic_params  = blob["critic_params"]
+        blob0 = blob[0]
+        network_params = blob0["network_params"]
+        actor_params   = blob0["actor_params"]
+        critic_params  = blob0["critic_params"]
 
     # Case 3: blob is FrozenDict({...})
     else:
