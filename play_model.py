@@ -94,18 +94,21 @@ def main():
     print("blob type:", type(blob))
 
     # --- now decode blob into params ---
-    if isinstance(blob, (list, tuple)) and len(blob) == 3:
+    if isinstance(blob, dict):
+        # Check if it's a dict with numeric string keys (from serialized list)
+        if "0" in blob and "1" in blob and "2" in blob:
+            network_params = blob["0"]
+            actor_params   = blob["1"]
+            critic_params  = blob["2"]
+        else:
+            # Regular FrozenDict/dict with named keys
+            network_params = blob["network_params"]
+            actor_params   = blob["actor_params"]
+            critic_params  = blob["critic_params"]
+    elif isinstance(blob, (list, tuple)) and len(blob) == 3:
         network_params, actor_params, critic_params = blob
-    elif isinstance(blob, (list, tuple)) and len(blob) == 1:
-        blob0 = blob[0]
-        network_params = blob0["network_params"]
-        actor_params   = blob0["actor_params"]
-        critic_params  = blob0["critic_params"]
     else:
-        # dict or FrozenDict
-        network_params = blob["network_params"]
-        actor_params   = blob["actor_params"]
-        critic_params  = blob["critic_params"]
+        raise ValueError(f"Unexpected blob structure: {type(blob)}, keys/len: {blob.keys() if hasattr(blob, 'keys') else len(blob)}")
 
     params = flax.core.FrozenDict({
         "network_params": network_params,
