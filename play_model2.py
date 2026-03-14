@@ -6,6 +6,7 @@ import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from functools import partial
 from flax.linen.initializers import constant, orthogonal
 from gymnasium.wrappers import AtariPreprocessing
 import ale_py  # needed for ALE env registration
@@ -61,7 +62,7 @@ class Actor(nn.Module):
         return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(2,))
 def act(params, obs, action_dim: int):
     obs = jnp.asarray(obs)
     h = Network().apply(params["network_params"], obs)
