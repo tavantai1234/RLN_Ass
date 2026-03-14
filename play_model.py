@@ -61,32 +61,48 @@ def main():
     p.add_argument("--episodes", type=int, default=10)
     p.add_argument("--seed", type=int, default=123)
     args = p.parse_args()
-
     with open(args.model_path, "rb") as f:
         payload = flax.serialization.from_bytes(None, f.read())
 
-    # Debug (optional but helpful)
     print("payload type:", type(payload))
-    try:
-        print("payload len:", len(payload))
-    except Exception as e:
-        print("payload len error:", e)
+    if isinstance(payload, dict):
+        print("payload keys:", list(payload.keys()))
+    else:
+        try:
+            print("payload len:", len(payload))
+        except Exception as e:
+            print("payload len error:", e)
 
-    saved_hparams, blob = payload
+    # --- normalize payload into (saved_hparams, blob) ---
+    if isinstance(payload, dict):
+        # common formats
+        if "hparams" in payload and "params" in payload:
+            saved_hparams = payload["hparams"]
+            blob = payload["params"]
+        # sometimes saved as {"0":..., "1":...}
+        elif "0" in payload and "1" in payload:
+            saved_hparams = payload["0"]
+            blob = payload["1"]
+        else:
+            # fallback: take first two values in dict order
+            items = list(payload.items())
+            saved_hparams = items[0][1]
+            blob = items[1][1]
+    else:
+        saved_hparams, blob = payload
 
-    # Case 1: blob is (network_params, actor_params, critic_params)
+    print("blob type:", type(blob))
+
+    # --- now decode blob into params ---
     if isinstance(blob, (list, tuple)) and len(blob) == 3:
         network_params, actor_params, critic_params = blob
-
-    # Case 2: blob is [FrozenDict({...})]  (a list with 1 element)
     elif isinstance(blob, (list, tuple)) and len(blob) == 1:
         blob0 = blob[0]
         network_params = blob0["network_params"]
         actor_params   = blob0["actor_params"]
         critic_params  = blob0["critic_params"]
-
-    # Case 3: blob is FrozenDict({...})
     else:
+        # dict or FrozenDict
         network_params = blob["network_params"]
         actor_params   = blob["actor_params"]
         critic_params  = blob["critic_params"]
