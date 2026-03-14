@@ -76,7 +76,7 @@ def parse_args():
         help="the discount factor gamma")
     parser.add_argument("--gae-lambda", type=float, default=0.95,
         help="the lambda for the general advantage estimation")
-    parser.add_argument("--num-minibatches", type=int, default=4,
+    parser.add_argument("--num-minibatches", type=int, default=16,
         help="the number of mini-batches")
     parser.add_argument("--update-epochs", type=int, default=4,
         help="the K epochs to update the policy")
@@ -781,7 +781,7 @@ if __name__ == "__main__":
         eval_episode_length = 0
         episodic_returns = []
         episodic_lengths = []
-        while len(episodic_returns) < 10:
+        while len(episodic_returns) < 30:
             eval_action = get_action_deterministic(
                 agent_state.params, eval_obs, eval_envs.single_action_space.n
             )
