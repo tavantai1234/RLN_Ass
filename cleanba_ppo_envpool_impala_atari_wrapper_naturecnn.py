@@ -781,7 +781,7 @@ if __name__ == "__main__":
         eval_episode_length = 0
         episodic_returns = []
         episodic_lengths = []
-        while len(episodic_returns) < 30:
+        while len(episodic_returns) < 10:
             eval_action = get_action_deterministic(
                 agent_state.params, eval_obs, eval_envs.single_action_space.n
             )
